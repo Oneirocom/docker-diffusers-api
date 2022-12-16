@@ -200,3 +200,5 @@ back via `{ $timings: { init: timeInMs, inference: timeInMs } }`.
 
 Originally based on https://github.com/bananaml/serverless-template-stable-diffusion.
 
+Adding some text to trigger build
+

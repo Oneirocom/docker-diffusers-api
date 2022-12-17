@@ -2,6 +2,50 @@
 
 * **NEXT MAIN**
 
+  * Callinputs `MODEL_ID`, `PIPELINE` and `SCHEDULER` are **now optional**.
+    If not specified, the default will be used, and returned in a `$meta`
+    key in the result.
+
+  * Tests: 1) Don't specify above defaults where possible, 2) Log exact
+    inputs sent to container, 3) Log the full result sent back,
+    substituting base64 image strings with their info, 4) format stack
+    traces on caught errors from container.
+
+* **NEXT MAIN (and already posted to forum)**
+
+  * **Latest diffusers, SDv2.1**.  All the latest goodness, and upgraded some
+    dependencies too.  Models are:
+
+    * `stabilityai/stable-diffusion-2-1-base` (512x512)
+    * `stabilityai/stable-diffusion-2-1` (768x768)
+
+  * **ALL THE PIPELINES**.  We no longer load a list of hard-coded pipelines
+    in `init()`.  Instead, we init and cache each on first use (for faster
+    first calls on cold boots), and, *all* pipelines, both official diffusers
+    and community pipelines, are available.
+    [Full details](https://banana-forums.dev/t/all-your-pipelines-are-belong-to-us/83)
+
+  * Dreambooth: Enable `mixed_precision` training, default to fp16.
+
+  * [Experimental] **[Runtime downloads](https://banana-forums.dev/t/runtime-downloads-dont-download-during-build/81/3)** (Dreambooth
+  only for now, more on the way)
+
+  * **S3**: Add upload/download progress indicators.
+
+  * Stable Diffusion has standardized **`image` instead of `init_image`** for
+    all pipelines.  Using `init_image` now shows a deprecation warning and
+    will be removed in future.
+
+  * **Changed `sd-base` to `diffusers-api`** as the default tag / name used
+    in the README examples and optional [./build][build script].
+
+  * **Much better error handling**.  We now `try...except` both the pipeline
+    run and entire `inference()` call, which will save you a trip to banana's
+    logs which don't always even show these errors and sometimes just leave
+    you with an unexplained stuck instance.  These kinds of errors are almost
+    always a result of problematic callInputs and modelInputs used for the
+    pipeline call, so finding them will be a lot easier now.
+
 * **2022-11-29**
 
   * **Diffusers v0.9.0, Stable Diffusion v2.0**.  Models:

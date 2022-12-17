@@ -2,28 +2,26 @@ from sched import scheduler
 import torch
 
 from torch import autocast
-from diffusers import (
-    pipelines as _pipelines,
-    LMSDiscreteScheduler,
-    DDIMScheduler,
-    PNDMScheduler,
-    DiffusionPipeline,
-    __version__,
-)
+from diffusers import __version__
 import base64
 from io import BytesIO
 import PIL
 import json
 from loadModel import loadModel
-from send import send, get_now
+from send import send, getTimings, clearSession
 import os
 import numpy as np
 import skimage
 import skimage.measure
 from PyPatchMatch import patch_match
 from getScheduler import getScheduler, SCHEDULERS
+from getPipeline import getPipelineForModel, listAvailablePipelines, clearPipelines
 import re
+import requests
+from download import download_model
+import traceback
 
+RUNTIME_DOWNLOADS = os.getenv("RUNTIME_DOWNLOADS") == "1"
 USE_DREAMBOOTH = os.getenv("USE_DREAMBOOTH") == "1"
 if USE_DREAMBOOTH:
     from train_dreambooth import TrainDreamBooth
@@ -32,35 +30,7 @@ MODEL_ID = os.environ.get("MODEL_ID")
 PIPELINE = os.environ.get("PIPELINE")
 HF_AUTH_TOKEN = os.getenv("HF_AUTH_TOKEN")
 
-PIPELINES = [
-    "StableDiffusionPipeline",
-    "StableDiffusionImg2ImgPipeline",
-    "StableDiffusionInpaintPipeline",
-    "StableDiffusionInpaintPipelineLegacy",
-]
-
 torch.set_grad_enabled(False)
-
-
-def createPipelinesFromModel(model):
-    pipelines = dict()
-    for pipeline in PIPELINES:
-        if hasattr(_pipelines, pipeline):
-            if hasattr(model, "components"):
-                pipelines[pipeline] = getattr(_pipelines, pipeline)(**model.components)
-            else:
-                pipelines[pipeline] = getattr(_pipelines, pipeline)(
-                    vae=model.vae,
-                    text_encoder=model.text_encoder,
-                    tokenizer=model.tokenizer,
-                    unet=model.unet,
-                    scheduler=model.scheduler,
-                    safety_checker=model.safety_checker,
-                    feature_extractor=model.feature_extractor,
-                )
-        else:
-            print(f'Skipping non-existent pipeline "{PIPELINE}"')
-    return pipelines
 
 
 class DummySafetyChecker:
@@ -73,12 +43,8 @@ class DummySafetyChecker:
 # Load your model to GPU as a global variable here using the variable name "model"
 def init():
     global model  # needed for bananna optimizations
-    global pipelines
-    global schedulers
     global dummy_safety_checker
-    global initTime
 
-    initStart = get_now()
     send(
         "init",
         "start",
@@ -88,27 +54,29 @@ def init():
             "model_id": MODEL_ID,
             "diffusers": __version__,
         },
-        True,
     )
 
     dummy_safety_checker = DummySafetyChecker()
 
-    if MODEL_ID == "ALL":
+    if MODEL_ID == "ALL" or RUNTIME_DOWNLOADS:
         global last_model_id
         last_model_id = None
-        return
 
-    model = loadModel(MODEL_ID)
-
-    if PIPELINE == "ALL":
-        pipelines = createPipelinesFromModel(model)
+    if not RUNTIME_DOWNLOADS:
+        model = loadModel(MODEL_ID)
 
     send("init", "done")
-    initTime = get_now() - initStart
 
 
 def decodeBase64Image(imageStr: str, name: str) -> PIL.Image:
     image = PIL.Image.open(BytesIO(base64.decodebytes(bytes(imageStr, "utf-8"))))
+    print(f'Decoded image "{name}": {image.format} {image.width}x{image.height}')
+    return image
+
+
+def getFromUrl(url: str, name: str) -> PIL.Image:
+    response = requests.get(url)
+    image = PIL.Image.open(BytesIO(response.content))
     print(f'Decoded image "{name}": {image.format} {image.width}x{image.height}')
     return image
 
@@ -128,6 +96,7 @@ def truncateInputs(inputs: dict):
 
 
 last_xformers_memory_efficient_attention = {}
+downloaded_models = {}
 
 # Inference is ran for every server call
 # Reference your preloaded global model variable here.
@@ -139,9 +108,12 @@ def inference(all_inputs: dict) -> dict:
     global dummy_safety_checker
     global last_xformers_memory_efficient_attention
 
+    clearSession()
+
     print(json.dumps(truncateInputs(all_inputs), indent=2))
     model_inputs = all_inputs.get("modelInputs", None)
     call_inputs = all_inputs.get("callInputs", None)
+    result = {"$meta": {}}
 
     if model_inputs == None or call_inputs == None:
         return {
@@ -154,14 +126,37 @@ def inference(all_inputs: dict) -> dict:
 
     startRequestId = call_inputs.get("startRequestId", None)
 
-    model_id = call_inputs.get("MODEL_ID")
+    model_id = call_inputs.get("MODEL_ID", None)
+    if not model_id:
+        model_id = MODEL_ID
+        result["$meta"].update({"MODEL_ID": MODEL_ID})
+
+    if RUNTIME_DOWNLOADS:
+        global downloaded_models
+        if last_model_id != model_id:
+            if not downloaded_models.get(model_id, None):
+                model_url = call_inputs.get("MODEL_URL", None)
+                if not model_url:
+                    return {
+                        "$error": {
+                            "code": "NO_MODEL_URL",
+                            "message": "Currently RUNTIME_DOWNOADS requires a MODEL_URL callInput",
+                        }
+                    }
+                download_model(model_id=model_id, model_url=model_url)
+                downloaded_models.update({model_id: True})
+            model = loadModel(model_id)
+            if PIPELINE == "ALL":
+                clearPipelines()
+            last_model_id = model_id
+
     if MODEL_ID == "ALL":
         if last_model_id != model_id:
             model = loadModel(model_id)
-            pipelines = createPipelinesFromModel(model)
+            clearPipelines()
             last_model_id = model_id
     else:
-        if model_id != MODEL_ID:
+        if model_id != MODEL_ID and not RUNTIME_DOWNLOADS:
             return {
                 "$error": {
                     "code": "MODEL_MISMATCH",
@@ -172,11 +167,30 @@ def inference(all_inputs: dict) -> dict:
             }
 
     if PIPELINE == "ALL":
-        pipeline = pipelines.get(call_inputs.get("PIPELINE"))
+        pipeline_name = call_inputs.get("PIPELINE", None)
+        if not pipeline_name:
+            pipeline_name = "StableDiffusionPipeline"
+            result["$meta"].update({"PIPELINE": pipeline_name})
+
+        pipeline = getPipelineForModel(pipeline_name, model, model_id)
+        if not pipeline:
+            return {
+                "$error": {
+                    "code": "NO_SUCH_PIPELINE",
+                    "message": f'"{pipeline_name}" is not an official nor community Diffusers pipelines',
+                    "requested": pipeline_name,
+                    "available": listAvailablePipelines(),
+                }
+            }
     else:
         pipeline = model
 
-    pipeline.scheduler = getScheduler(MODEL_ID, call_inputs.get("SCHEDULER", None))
+    scheduler_name = call_inputs.get("SCHEDULER", None)
+    if not scheduler_name:
+        scheduler_name = "DPMSolverMultistepScheduler"
+        result["$meta"].update({"SCHEDULER": scheduler_name})
+
+    pipeline.scheduler = getScheduler(model_id, scheduler_name)
     if pipeline.scheduler == None:
         return {
             "$error": {
@@ -191,6 +205,8 @@ def inference(all_inputs: dict) -> dict:
     pipeline.safety_checker = (
         model.safety_checker if safety_checker else dummy_safety_checker
     )
+    is_url = call_inputs.get("is_url", False)
+    image_decoder = getFromUrl if is_url else decodeBase64Image
 
     # Parse out your arguments
     # prompt = model_inputs.get("prompt", None)
@@ -205,28 +221,27 @@ def inference(all_inputs: dict) -> dict:
     #   strength = model_inputs.get("strength", 0.75)
 
     if "init_image" in model_inputs:
-        model_inputs["init_image"] = decodeBase64Image(
+        model_inputs["init_image"] = image_decoder(
             model_inputs.get("init_image"), "init_image"
         )
 
     if "image" in model_inputs:
-        model_inputs["image"] = decodeBase64Image(model_inputs.get("image"), "image")
+        model_inputs["image"] = image_decoder(model_inputs.get("image"), "image")
 
     if "mask_image" in model_inputs:
-        model_inputs["mask_image"] = decodeBase64Image(
+        model_inputs["mask_image"] = image_decoder(
             model_inputs.get("mask_image"), "mask_image"
         )
 
     if "instance_images" in model_inputs:
         model_inputs["instance_images"] = list(
             map(
-                lambda str: decodeBase64Image(str, "instance_image"),
+                lambda str: image_decoder(str, "instance_image"),
                 model_inputs["instance_images"],
             )
         )
 
-    inferenceStart = get_now()
-    send("inference", "start", {"startRequestId": startRequestId}, True)
+    send("inference", "start", {"startRequestId": startRequestId})
 
     # Run patchmatch for inpainting
     if call_inputs.get("FILL_MODE", None) == "patchmatch":
@@ -254,7 +269,7 @@ def inference(all_inputs: dict) -> dict:
             return {
                 "$error": {
                     "code": "INVALID_XFORMERS_MEMORY_EFFICIENT_ATTENTION_VALUE",
-                    "message": f'Model "{model_id}" not available on this container which hosts "{MODEL_ID}"',
+                    "message": f"x_m_e_a expects True or False, not: {x_m_e_a}",
                     "requested": x_m_e_a,
                     "available": [True, False],
                 }
@@ -274,13 +289,10 @@ def inference(all_inputs: dict) -> dict:
                 }
             }
         torch.set_grad_enabled(True)
-        result = TrainDreamBooth(model_id, pipeline, model_inputs, call_inputs)
+        result = result | TrainDreamBooth(model_id, pipeline, model_inputs, call_inputs)
         torch.set_grad_enabled(False)
         send("inference", "done", {"startRequestId": startRequestId})
-        inferenceTime = get_now() - inferenceStart
-        timings = result.get("$timings", {})
-        timings = {"init": initTime, "inference": inferenceTime, **timings}
-        result.update({"$timings": timings})
+        result.update({"$timings": getTimings()})
         return result
 
     # Do this after dreambooth as dreambooth accepts a seed int directly.
@@ -295,13 +307,28 @@ def inference(all_inputs: dict) -> dict:
     model_inputs.update({"generator": generator})
 
     with torch.inference_mode():
-        # autocast im2img and inpaint which are broken in 0.4.0, 0.4.1
-        # still broken in 0.5.1
-        if call_inputs.get("PIPELINE") != "StableDiffusionPipeline":
-            with autocast("cuda"):
+        try:
+            custom_pipeline_method = call_inputs.get("custom_pipeline_method", None)
+            if custom_pipeline_method:
+                images = getattr(pipeline, custom_pipeline_method)(
+                    **model_inputs
+                ).images
+            # autocast im2img and inpaint which are broken in 0.4.0, 0.4.1
+            # still broken in 0.5.1
+            elif call_inputs.get("PIPELINE") != "StableDiffusionPipeline":
+                with autocast("cuda"):
+                    images = pipeline(**model_inputs).images
+            else:
                 images = pipeline(**model_inputs).images
-        else:
-            images = pipeline(**model_inputs).images
+        except Exception as err:
+            return {
+                "$error": {
+                    "code": "PIPELINE_ERROR",
+                    "name": type(err).__name__,
+                    "message": str(err),
+                    "stack": traceback.format_exc(),
+                }
+            }
 
     images_base64 = []
     for image in images:
@@ -310,11 +337,13 @@ def inference(all_inputs: dict) -> dict:
         images_base64.append(base64.b64encode(buffered.getvalue()).decode("utf-8"))
 
     send("inference", "done", {"startRequestId": startRequestId})
-    inferenceTime = get_now() - inferenceStart
-    timings = {"init": initTime, "inference": inferenceTime}
 
     # Return the results as a dictionary
     if len(images_base64) > 1:
-        return {"images_base64": images_base64, "$timings": timings}
+        result = result | {"images_base64": images_base64}
+    else:
+        result = result | {"image_base64": images_base64[0]}
 
-    return {"image_base64": images_base64[0], "$timings": timings}
+    result = result | {"$timings": getTimings()}
+
+    return result

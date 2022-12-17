@@ -1,7 +1,9 @@
 import boto3
+import botocore
 import re
 import os
 import time
+from tqdm import tqdm
 from botocore.client import Config
 
 
@@ -44,13 +46,14 @@ class S3Storage:
         self.bucket_name = s3_dest["bucket"]
         self.path = s3_dest["path"]
 
-        self._s3 = None
+        self._s3resource = None
+        self._s3client = None
         self._bucket = None
         print("self.endpoint_url", self.endpoint_url)
 
-    def s3(self):
-        if self._s3:
-            return self._s3
+    def s3resource(self):
+        if self._s3resource:
+            return self._s3resource
 
         self._s3 = boto3.resource(
             "s3",
@@ -59,11 +62,22 @@ class S3Storage:
         )
         return self._s3
 
+    def s3client(self):
+        if self._s3client:
+            return self._s3client
+
+        self._s3client = boto3.client(
+            "s3",
+            endpoint_url=self.endpoint_url,
+            config=Config(signature_version="s3v4"),
+        )
+        return self._s3client
+
     def bucket(self):
         if self._bucket:
             return self._bucket
 
-        self._bucket = self.s3().Bucket(self.bucket_name)
+        self._bucket = self.s3resource().Bucket(self.bucket_name)
         return self._bucket
 
     def upload_file(self, source, dest):
@@ -71,7 +85,13 @@ class S3Storage:
             dest = self.path
 
         upload_start = get_now()
-        result = self.bucket().upload_file(source, dest)
+        file_size = os.stat(source).st_size
+        with tqdm(total=file_size, unit="B", unit_scale=True, desc="Uploading") as bar:
+            result = self.bucket().upload_file(
+                Filename=source,
+                Key=dest,
+                Callback=lambda bytes_transferred: bar.update(bytes_transferred),
+            )
         print(result)
         upload_total = get_now() - upload_start
 
@@ -81,4 +101,28 @@ class S3Storage:
         if not dest:
             dest = self.path.split("/").pop()
         print(f"Downloading {self.url} to {dest}...")
-        self.bucket().download_file(self.path, dest)
+        object = self.s3resource().Object(self.bucket_name, self.path)
+        object.load()
+
+        with tqdm(
+            total=object.content_length, unit="B", unit_scale=True, desc="Downloading"
+        ) as bar:
+            object.download_file(
+                Filename=dest,
+                Callback=lambda bytes_transffered: bar.update(bytes_transffered),
+            )
+
+    def file_exists(self):
+        # res = self.s3client().list_objects_v2(
+        #    Bucket=self.bucket_name, Prefix=self.path, MaxKeys=1
+        # )
+        # return "Contents" in res
+        object = self.s3resource().Object(self.bucket_name, self.path)
+        try:
+            object.load()
+        except botocore.exceptions.ClientError as error:
+            if error.response["Error"]["Code"] == "404":
+                return False
+            else:
+                raise
+        return True

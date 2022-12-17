@@ -7,8 +7,12 @@ Please give credit and link back to this repo if you use it in a public project.
 
 ## Features
 
-- Pipelines: txt2img, img2img and inpainting in a single container
 - Models: stable-diffusion, waifu-diffusion, and easy to add others (e.g. jp-sd)
+- Pipelines: txt2img, img2img and inpainting in a single container
+
+  (
+  [all diffusers official and community pipelines](https://banana-forums.dev/t/all-your-pipelines-are-belong-to-us/83) are wrapped, but untested)
+
 - All model inputs supported, including setting nsfw filter per request
 - _Permute_ base config to multiple forks based on yaml config with vars
 - Optionally send signed event logs / performance data to a REST endpoint
@@ -59,7 +63,7 @@ serverless).
 
 **Building**
 
-1. `docker build -t banana-sd --build-arg HF_AUTH_TOKEN=$HF_AUTH_TOKEN .`
+1. `docker build -t diffusers-api --build-arg HF_AUTH_TOKEN=$HF_AUTH_TOKEN .`
 1. See [CONTRIBUTING.md](./CONTRIBUTING.md) for more helpful hints.
 1. Note: your first build can take a really long time, depending on
    your PC & network speed, and _especially when using the `CHECKPOINT_URL`
@@ -67,7 +71,7 @@ serverless).
 
 **Running**
 
-1. `docker run -it --gpus all -p 8000:8000 banana-sd`
+1. `docker run -it --gpus all -p 8000:8000 diffusers-api`
 1. Note: the `-it` is optional but makes it alot quicker/easier to stop the
    container using `Ctrl-C`.
 1. If you get a `CUDA initialization: CUDA unknown error` after suspend,

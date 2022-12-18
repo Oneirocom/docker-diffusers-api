@@ -23,7 +23,7 @@ RUN if [ -n "$http_proxy" ] ; then \
     | sed 'H;1h;$!d;x; s/^.*\(-----BEGIN CERTIFICATE-----.*-----END CERTIFICATE-----\)\n---\nServer certificate.*$/\1/' \
     > /usr/local/share/ca-certificates/squid-self-signed.crt ; \
     update-ca-certificates ; \
-  fi
+    fi
 ENV REQUESTS_CA_BUNDLE=${http_proxy:+/usr/local/share/ca-certificates/squid-self-signed.crt}
 
 ENV DEBIAN_FRONTEND=noninteractive
@@ -132,9 +132,9 @@ ARG MODEL_URL=""
 ENV MODEL_URL=${MODEL_URL}
 # If set, it will be downloaded and converted to diffusers format, and
 # saved in a directory with same MODEL_ID name to be loaded by diffusers.
-ARG CHECKPOINT_URL=""
+ARG CHECKPOINT_URL="https://huggingface.co/spaceinvader/tarrot/resolve/main/tarot_rws_step_2500.ckpt"
 ENV CHECKPOINT_URL=${CHECKPOINT_URL}
-ARG CHECKPOINT_CONFIG_URL=""
+ARG CHECKPOINT_CONFIG_URL="https://raw.githubusercontent.com/Stability-AI/stablediffusion/main/configs/stable-diffusion/v2-inference.yaml"
 ENV CHECKPOINT_CONFIG_URL=${CHECKPOINT_CONFIG_URL}
 # Set to true to NOT download model at build time, rather at init / usage.
 ARG RUNTIME_DOWNLOADS=0
@@ -167,7 +167,7 @@ RUN if [ "$USE_DREAMBOOTH" = "1" ] ; then \
     # By specifying the same torch version as conda, it won't download again.
     # Without this, it will upgrade torch, break xformers, make bigger image.
     pip install -r diffusers/examples/dreambooth/requirements.txt bitsandbytes torch==1.12.1 ; \
-  fi
+    fi
 RUN if [ "$USE_DREAMBOOTH" = "1" ] ; then apt-get install git-lfs ; fi
 
 # Add your custom app code, init() and inference()

@@ -134,7 +134,7 @@ ENV MODEL_URL=${MODEL_URL}
 # saved in a directory with same MODEL_ID name to be loaded by diffusers.
 ARG CHECKPOINT_URL="https://huggingface.co/spaceinvader/tarrot/resolve/main/tarot_rws_step_2500.ckpt"
 ENV CHECKPOINT_URL=${CHECKPOINT_URL}
-ARG CHECKPOINT_CONFIG_URL="https://raw.githubusercontent.com/Stability-AI/stablediffusion/main/configs/stable-diffusion/v2-inference.yaml"
+ARG CHECKPOINT_CONFIG_URL="https://raw.githubusercontent.com/Stability-AI/stablediffusion/main/configs/stable-diffusion/v2-inference-v.yaml"
 ENV CHECKPOINT_CONFIG_URL=${CHECKPOINT_CONFIG_URL}
 # Set to true to NOT download model at build time, rather at init / usage.
 ARG RUNTIME_DOWNLOADS=0
